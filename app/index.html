@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Connection budget calculator</title>
+<style>
+  body { font: 15px/1.5 system-ui, sans-serif; margin: 0; background: #f6f7f9; color: #1c2330; }
+  main { max-width: 860px; margin: 0 auto; padding: 24px 16px 40px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  p.sub { margin: 0 0 18px; color: #556; }
+  form { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; background: #fff; border: 1px solid #dde; border-radius: 10px; padding: 16px; }
+  label { display: grid; gap: 4px; font-weight: 600; font-size: 13px; }
+  label small { font-weight: 400; color: #667; }
+  select, input { font: inherit; padding: 6px 8px; border: 1px solid #bbc; border-radius: 6px; }
+  #result { margin-top: 16px; display: grid; gap: 10px; }
+  .nums { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  .num { background: #fff; border: 1px solid #dde; border-radius: 10px; padding: 10px 12px; }
+  .num b { display: block; font-size: 24px; }
+  .num span { color: #667; font-size: 12px; }
+  .f { border-radius: 8px; padding: 10px 12px; border: 1px solid; }
+  .f.ok { background: #e8f7ee; border-color: #8fd1a8; }
+  .f.warn { background: #fff6dd; border-color: #e6c35c; }
+  .f.bad { background: #fde8e8; border-color: #e59a9a; }
+  .note { color: #556; font-size: 13px; margin-top: 18px; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Connection budget calculator</h1>
+  <p class="sub">How many database connections will my app use, through which door, and does it fit?</p>
+  <form id="f">
+    <label>Compute size <select id="compute"></select></label>
+    <label>Pooler pool size <small>Database settings → Connection pooling</small><input id="poolSize" type="number" min="1" value="15"></label>
+    <label>Door <select id="door"></select></label>
+    <label>Framework <select id="framework"></select><small id="fwnote"></small></label>
+    <label id="paramWrap" hidden><span id="paramLabel"></span><input id="param" type="number" min="1" value="10"></label>
+    <label>Running copies of the app <small>servers, containers, or busy functions at the same moment</small><input id="instances" type="number" min="1" value="1"></label>
+    <label>Left for Supabase's own services <small>Auth, Storage, PostgREST, health checks. My project showed about 16-17 when idle.</small><input id="headroom" type="number" min="0" value="17"></label>
+  </form>
+  <section id="result" aria-live="polite">
+    <div class="nums">
+      <div class="num"><b id="nClients">-</b><span>client connections your app opens</span></div>
+      <div class="num"><b id="nBackend">-</b><span>backend connections to Postgres</span></div>
+      <div class="num"><b id="nTotal">-</b><span>total with Supabase services</span></div>
+      <div class="num"><b id="nMax">-</b><span>max_connections for this size</span></div>
+    </div>
+    <div id="findings"></div>
+  </section>
+  <p class="note">This is a model, not a measurement of your project. Compute-size limits come from the Supabase docs (checked 2026-11-02). The behaviours (session mode errors above the pool size, idle connections staying open for about 3 minutes) are from one Free-plan project in one run. The numbers inside the page do not call any server.</p>
+</main>
+<script src="calc.js"></script>
+<script src="board.js"></script>
+</body>
+</html>

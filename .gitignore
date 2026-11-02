@@ -1,0 +1,17 @@
+# secrets and local config — never commit these
+.env
+.env.*
+!.env.example
+config.js
+*.pem
+*.key
+secrets*
+# tooling / OS noise
+node_modules/
+__pycache__/
+.DS_Store
+.vscode/
+.idea/
+*.log
+supabase/.temp/
+supabase/.branches/

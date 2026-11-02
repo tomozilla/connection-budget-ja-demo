@@ -1,0 +1,16 @@
+{
+  "name": "connection-budget-demo",
+  "private": true,
+  "type": "commonjs",
+  "scripts": { "test": "node app/test-calc.js" },
+  "devDependencies": {
+    "prisma": "6.19.3"
+  },
+  "dependencies": {
+    "@prisma/client": "6.19.3",
+    "@supabase/supabase-js": "2.118.0",
+    "drizzle-orm": "0.45.4",
+    "pg": "8.23.1",
+    "postgres": "4.0.0"
+  }
+}
