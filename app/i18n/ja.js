@@ -7,7 +7,7 @@
       'postgres.js 4': { note: '既定 max = 10。トランザクションモードでは max_pipeline: 1 を指定', txFix: 'postgres.js: max_pipeline: 1 を指定（1本の接続に複数のクエリを重ねるとハングしました。prepare: false だけでは直りませんでした）。' },
       'Drizzle (on node-postgres)': { note: '自前のプールなし。ドライバのプール（pg: 10）' },
       'Prisma 6 (query engine)': { note: '既定のプール = 物理CPUコア数 x 2 + 1', param: 'アプリを動かすマシンの物理CPUコア数', txFix: 'Prisma 6: URLに ?pgbouncer=true を付ける（無いと prepared statement "sN" does not exist）。' },
-      'Prisma 7 (pg adapter)': { note: 'プールの既定 max = 10（pgドライバ）' },
+      'Prisma 7 (pg adapter)': { note: 'プールの既定 max = 10（pgドライバ）。待ちの上限は既定でなし: connectionTimeoutMillis を付ける（Prisma 6は10秒で諦めた）' },
       'SQLAlchemy 2': { note: 'pool_size 5 + max_overflow 10 = 15', txFix: 'SQLAlchemy + psycopg 3: prepare_threshold=None を指定（5回で自動prepareされ、トランザクションモードで壊れます）。' },
       'Django (default, no pool)': { note: 'busyなスレッドごとに1接続（リクエスト終了で閉じる）', param: '1コピーあたりのbusyなスレッド数' },
       'Django 5.1+ OPTIONS pool=True': { note: 'psycopg_poolの既定: min_size 4、max_size は min_size と同じ', txFix: 'Django + psycopg 3: OPTIONS で prepare_threshold=None を指定。' },

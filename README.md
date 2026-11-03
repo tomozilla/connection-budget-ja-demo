@@ -34,7 +34,7 @@ Rule of thumb from the Supabase docs (Connection management): keep the pool size
 | `lab/setup.sql`, `setup-services.sql`, `setup-leak.sql` | Test roles `r1`..`r4`, `slow(s)`, `ping()`; a Storage bucket for the probe; the RLS leak demo objects (local lab only) |
 | `scripts/node/` | `lib.mjs` plus numbered tests 01-24 (table below) |
 | `scripts/python/` | psycopg 3 auto-prepare, SQLAlchemy, Django, library waits |
-| `scripts/prisma6/`, `scripts/prisma7/` | The Prisma tests (separate `package.json` each) |
+| `scripts/prisma6/`, `scripts/prisma7/` | The Prisma tests, including each version's behaviour when the pool is full (`pool-timeout`); separate `package.json` each |
 | `results/RESULTS.md` | Every number I measured, with the script that produced it |
 | `results/upstream-issue-drafts.md` | Draft issue texts for two behaviours. **Not filed.** |
 | `app/` | The calculator (plain HTML/JS, no build, no network calls, no keys): `index.html`, `calc.js`, `board.js`, `i18n/en.js` |
@@ -90,11 +90,12 @@ The local pooler runs **one mode at a time** (set `pool_mode`, restart); the for
 | `15-postgresjs-repeat` | postgres.js with the same query repeated per connection |
 | `16-full-database-services` | Auth sign-in, Storage, Data API while the database is full, and recovery time |
 | `17-pgbouncer-compare` | the same checks against PgBouncer |
-| `18-guardrails` | `limit` (role connection limit), `timeouts`, `monitor` (`pg_use_reserved_connections`) |
+| `18-guardrails` | `limit [n]` (role connection limit: try the pool size and pool size + 1), `timeouts`, `cron` (a `pg_cron` backstop that a client can't `SET` away), `monitor` (`pg_use_reserved_connections`) |
 | `19-library-waits` | node-postgres waits (the other libraries: Python scripts 04, 05 and Prisma 6 `pool-timeout.cjs`) |
 | `20-timeout-prediction` | 199 clients: waits vs the 60 s limit |
 | `21-open-loop` | fixed arrival rate with a connection per request |
 | `22-leak-rls`, `23-data-api-no-leak` | a leaked setting becomes a leaked row; the Data API contrast |
+| `25-postgresjs-retry` | counts the Parse messages postgres.js sends and the errors it sees: is the pooler hang or the lack of errors a hidden retry? |
 | `24-hosted-tiny` | **hosted Free project only**, pool size 3, a handful of clients (see below) |
 
 ## Hosted check (script 24)
@@ -105,16 +106,16 @@ Only on a throwaway **Free** project, and only after setting the pooler **pool s
 - **Each (role, database, mode) has its own pool.** One role on both ports held 16 + 15 = 31 backends; on a hosted pooler at pool size 3: 4 + 3. The docs have said both "shared between the two ports" and "per user, database and mode"; the dashboard says per user+db.
 - **Transaction mode held pool size + 1** (16 for 15, hosted 4 for 3). Session mode held exactly the pool size, PgBouncer 1.26.1 exactly 15. I can't explain the extra one.
 - **Roles multiply:** 2 roles = 16 + 16, 3 roles filled the lab (87 of 87).
-- **The client cap of 200 was per role** in my lab (300 clients over 2 roles all connected). Not tested on hosted.
-- **When the database is full,** what needs a new connection fails first: direct connections (53300), pooler logins (`EAUTHQUERY`), **Auth sign-in (500)**. The Data API and Storage kept working while their open connections were enough. After the heavy clients stopped, sign-in recovered at about 62 s.
-- **Waiting:** transaction mode queues and gives up after **60 s** (`ECHECKOUTTIMEOUT`; hosted too); session mode refused extra clients at once (`EMAXCONNSESSION`) although the FAQ says it can queue. A prediction, `(clients - backends) / backends x query time`, matched: 199 clients, 4.5 s queries no errors, 5.5 s queries 46 timeouts.
+- **The client cap of 200 was per role** in my lab (300 clients over 2 roles all connected). The Supavisor source (`main`, 2026-11-03) counts clients per pool (role x mode) against `max_clients`; the hosted value of `max_clients` itself I haven't seen.
+- **When the database is full,** whatever needs a new connection fails first: direct connections (53300), pooler logins (`EAUTHQUERY`), and in my lab **Auth sign-in (500)**, because Auth held no idle connection (hosted Auth showed none while idle either; under load I haven't checked). The Data API and Storage kept working while their open connections were enough. After the heavy clients stopped, sign-in recovered at about 62 s.
+- **Waiting:** transaction mode queues and gives up after **60 s** (`ECHECKOUTTIMEOUT`; hosted too); session mode refused extra clients at once (`EMAXCONNSESSION`) although the FAQ says it can queue. A prediction, `(clients - backends) / backends x query time` (queue wait; the measured p50 also includes the run time), matched: 199 clients, 4.5 s queries: 551 requests, no errors; 5.5 s queries: 46 of 510 requests timed out.
 - **Open loop:** at 200 arrivals/s against about 150/s of capacity, latency rose from 0.23 s to 1.26 s in 4 s, then about a quarter of arrivals got `EMAXCONN`.
 - **The Data API has its own pool** (10 + a `LISTEN "pgrst"` connection). 50 concurrent 2.5 s calls: 40 ok, 10 failed after exactly 10 s with `504 PGRST003`. `anon` has `statement_timeout=3s`.
-- **postgres.js 4.0.0 hang on the transaction pooler = pipelining**, not prepared statements (lab and hosted): `prepare:false` alone still hangs, `max_pipeline:1` alone fixes it, also with the same query repeated 3000 times. PgBouncer 1.26.1 did not hang.
+- **postgres.js 4.0.0 hang on the transaction pooler = pipelining**, not prepared statements (lab and hosted): `prepare:false` alone still hangs, `max_pipeline:1` alone fixes it, also with the same query repeated 3000 times. It is not a hidden retry: with `max_pipeline:1` the client sent one Parse per connection (10 for 3000 queries) and the logs show no `26000`. PgBouncer 1.26.1 did not hang.
 - **Prepared statements break on Supavisor's transaction mode** for Prisma 6 without `?pgbouncer=true` and for psycopg 3 after 5 runs (fix: `prepare_threshold=None`). Prisma 7 with the pg adapter, node-postgres and postgres.js (with `max_pipeline: 1`) did not.
 - **Session state leaks between clients in transaction mode** (also through PgBouncer): `set_config(..., false)` 8 of 8, `SET statement_timeout = 0` silently removed the guardrail, and through an RLS policy a leaked setting showed Alice's row to a request that forgot to set the user; `SET ROLE r_admin` leaked a privilege. `set_config(..., true)` did not leak. The Data API did not leak (0 of 40 mixed requests).
-- **Library defaults and waits:** Prisma 6 = cores x 2 + 1 (21 on 10 cores), Prisma 7 + pg = 10, SQLAlchemy 5 + 10, psycopg_pool 4, Django 5.2 `pool=True` = 4; waits: pg none, Prisma 6 10 s, psycopg_pool and SQLAlchemy 30 s.
-- **Guardrails:** a role `connection limit` stops one role and refuses at once; a role `statement_timeout` can be removed by the client; `reserved_connections` + `pg_use_reserved_connections` lets a monitoring role in when full (lab).
+- **Library defaults and waits:** Prisma 6 = cores x 2 + 1 (21 on 10 cores), Prisma 7 + pg = 10, SQLAlchemy 5 + 10, psycopg_pool 4, Django 5.2 `pool=True` = 4; waits: pg none, **Prisma 6 10 s but Prisma 7 + pg adapter none (waits 15 s for the fifth of five 3 s queries; `connectionTimeoutMillis` fixes it)**, psycopg_pool and SQLAlchemy 30 s.
+- **Guardrails:** a role `connection limit` stops one role and refuses at once, and **must be pool size + 1 or more** (limit 15 on a pool of 15: 25 of 40 queries failed; 16: none); a role `statement_timeout` can be removed by the client, so a `pg_cron` job that cancels long queries is the backstop (a client that had set it to 0 was cancelled after 10 to 11 s); `reserved_connections` + `pg_use_reserved_connections` lets a monitoring role in when full (lab) and is subtracted in equation 1.
 - **Latency, not just peaks:** throughput capped near 16 / query time; past the cap extra clients only add waiting. Little's law predicted the cap.
 - **Failure:** a node-postgres pool without an `error` handler crashes the process when the database kills an idle connection; SQLAlchemy needs `pool_pre_ping`.
 - **Pool lingering:** about 2 minutes locally after clients closed.
@@ -128,7 +129,7 @@ Only on a throwaway **Free** project, and only after setting the pooler **pool s
 - The scripts need only a **publishable** key. Never put a secret or service_role key anywhere here.
 
 ## Not verified
-- **Hosted beyond pool size 3:** the client-connection chart, the client cap per role on hosted, the hosted `max_connections` split between Supabase services and your connections (I used a first-run estimate of about 16 at idle), hosted PostgREST pool settings, `reserved_connections` on hosted, Studio at saturation, any hosted load near the real limits.
+- **Hosted beyond pool size 3:** the client-connection chart, the client cap per role on hosted, the hosted `max_connections` split under load (idle, no traffic, read once on 2026-11-03: 4 of 60 in use), hosted PostgREST pool settings, `reserved_connections` on hosted, Studio at saturation, any hosted load near the real limits.
 - **Not a hosted dedicated pooler:** the PgBouncer here is a container with its image defaults.
 - **Supavisor settings:** the CLI tenant sets no prepared-statement switch and I found none; hosted tenant settings are unknown. Newer Supavisor versions may behave differently.
 - Rails, Edge Functions with postgres.js, Npgsql, pgx, HikariCP; compute sizes above Nano (numbers from the docs); latency across regions; platform request limits.

@@ -7,7 +7,7 @@
       'postgres.js 4': { note: 'default max = 10. On the transaction pooler set max_pipeline: 1', txFix: 'postgres.js: set max_pipeline: 1 (queries pipelined on one connection hung; prepare: false alone did not fix it).' },
       'Drizzle (on node-postgres)': { note: 'No pool of its own; uses the driver (pg: 10)' },
       'Prisma 6 (query engine)': { note: 'default pool = physical CPU cores x 2 + 1', param: 'Physical CPU cores of the machine running the app', txFix: 'Prisma 6: add ?pgbouncer=true to the URL (without it: prepared statement "sN" does not exist).' },
-      'Prisma 7 (pg adapter)': { note: 'pool default max = 10 (the pg driver)' },
+      'Prisma 7 (pg adapter)': { note: 'pool default max = 10 (the pg driver). No default wait limit: set connectionTimeoutMillis (Prisma 6 gave up after 10 s)' },
       'SQLAlchemy 2': { note: 'pool_size 5 + max_overflow 10 = 15', txFix: 'SQLAlchemy + psycopg 3: set prepare_threshold=None (auto-prepare after 5 runs breaks on the transaction pooler).' },
       'Django (default, no pool)': { note: 'one connection per busy thread, closed per request', param: 'Busy threads / workers per copy' },
       'Django 5.1+ OPTIONS pool=True': { note: 'psycopg_pool default: min_size 4, max_size = min_size', txFix: 'Django + psycopg 3: set prepare_threshold=None in OPTIONS.' },

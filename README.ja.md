@@ -34,7 +34,7 @@ Supabaseのドキュメント（Connection management）の目安: Data APIを�
 | `lab/setup.sql`、`setup-services.sql`、`setup-leak.sql` | テスト用ロール `r1`〜`r4`、`slow(s)`、`ping()`。Storageのバケット。RLSの漏れの実験用オブジェクト（ローカルのラボ専用） |
 | `scripts/node/` | `lib.mjs` と、番号つきのテスト01〜24（下の表） |
 | `scripts/python/` | psycopg 3の自動prepare、SQLAlchemy、Django、ライブラリの待ち |
-| `scripts/prisma6/`, `scripts/prisma7/` | Prismaのテスト（それぞれ `package.json` あり） |
+| `scripts/prisma6/`, `scripts/prisma7/` | Prismaのテスト（プールが埋まったときの動きも。`pool-timeout`）。それぞれ `package.json` あり |
 | `results/RESULTS.md` | 測った数字すべてと、出したスクリプト |
 | `results/upstream-issue-drafts.md` | 2つの挙動についての、報告文の下書き。**まだ報告していません** |
 | `app/` | 計算ページ（素のHTML/JS、ビルド不要、通信なし、鍵なし）。`index.html`、`calc.js`、`board.js`、`i18n/` |
@@ -91,11 +91,12 @@ cd scripts/prisma6 && npm install && npx prisma generate && node run.cjs "<?pgbo
 | `15-postgresjs-repeat` | postgres.jsで、同じクエリを接続ごとに繰り返す |
 | `16-full-database-services` | データベースが満杯のときの、Authのサインイン、Storage、Data API。回復までの時間 |
 | `17-pgbouncer-compare` | 同じ検査を、PgBouncerに |
-| `18-guardrails` | `limit`（ロールの接続上限）、`timeouts`、`monitor`（`pg_use_reserved_connections`） |
+| `18-guardrails` | `limit [n]`（ロールの接続上限。プールサイズと、プールサイズ + 1で比べる）、`timeouts`、`cron`（クライアントが `SET` で外せない `pg_cron` の後ろ盾）、`monitor`（`pg_use_reserved_connections`） |
 | `19-library-waits` | node-postgresの待ち（ほかのライブラリは、Pythonの04、05と、Prisma 6の `pool-timeout.cjs`） |
 | `20-timeout-prediction` | 199クライアント。待ちと60秒の上限 |
 | `21-open-loop` | 到着が一定の速さで続く。1リクエストごとに接続 |
 | `22-leak-rls`, `23-data-api-no-leak` | 漏れた設定が、漏れた行になる。Data APIとの対照 |
+| `25-postgresjs-retry` | postgres.jsが送るParseメッセージと、見えるエラーを数える。ハングやエラーが出ないのは、黙ったやり直しのせいか |
 | `24-hosted-tiny` | **ホスト版の無料プロジェクト専用**。プールサイズ3、数本のクライアント（下記） |
 
 ## ホスト版の確認（スクリプト24）
@@ -106,7 +107,7 @@ cd scripts/prisma6 && npm install && npx prisma generate && node run.cjs "<?pgbo
 - **(ロール, データベース, モード) ごとに別のプール。** 1つのロールで両方のポートを使うと、16 + 15 = 31本。ホスト版のプールサイズ3では、4 + 3。ドキュメントには「2つのポートで共有」と「ユーザー・DB・モードごと」の両方がありました。ダッシュボードは「per user+db」。
 - **トランザクションモードは、プールサイズ + 1**（15で16、ホスト版は3で4）。セッションモードはちょうどプールサイズ、PgBouncer 1.26.1は15ちょうど。余分な1本の理由は分かりません。
 - **ロールは掛け算:** 2ロールで16 + 16、3ロールでラボが満杯（87 / 87）。
-- **クライアント上限の200は、私のラボではロールごと**（2ロールで300本、全部つながった）。ホスト版では未確認。
+- **クライアント上限の200は、私のラボではロールごと**（2ロールで300本、全部つながった）。Supavisorのソース（`main`、2026-11-03）は、プール（ロール × モード）ごとにクライアント数を `max_clients` と比べています。ホスト版の `max_clients` の値そのものは見ていません。
 - **満杯になると、新しい接続が要るものから失敗:** 直接接続（53300）、プーラーのログイン（`EAUTHQUERY`）、**Authのサインイン（500）**。Data APIとStorageは、開いている接続で足りる間は動いた。重いクライアントが止まったあと、サインインは約62秒で回復。
 - **待ち:** トランザクションモードは待たせて、**60秒**で諦める（`ECHECKOUTTIMEOUT`。ホスト版でも）。セッションモードは、FAQでは待たせるとあるのに、超えた分を即座に拒否（`EMAXCONNSESSION`）。予想 `(クライアント数 − バックエンド数) ÷ バックエンド数 × クエリの秒数` が当たった: 199クライアント、4.5秒のクエリはエラーなし、5.5秒のクエリは46件がタイムアウト。
 - **オープンループ:** 毎秒200回の到着（処理能力は約150回）で、遅延が4秒で0.23秒から1.26秒に上がり、その後は到着の約4分の1が `EMAXCONN`。
@@ -129,7 +130,7 @@ cd scripts/prisma6 && npm install && npx prisma generate && node run.cjs "<?pgbo
 - スクリプトが必要とするのは**公開用（publishable）**キーだけです。secretやservice_roleキーは、ここには絶対に置かないでください。
 
 ## 確かめられていないこと
-- **プールサイズ3より先のホスト版:** クライアント接続数のグラフ、クライアント上限がロールごとかどうか、ホスト版の `max_connections` のうちSupabaseのサービスが使う分（最初の測定の「何もしていないとき約16本」という見積もりを使いました）、PostgRESTのプール設定、ホスト版の `reserved_connections`、満杯のときのStudio、本当の上限に近いホスト版の負荷。
+- **プールサイズ3より先のホスト版:** クライアント接続数のグラフ、クライアント上限がロールごとかどうか、ホスト版の `max_connections` のうちSupabaseのサービスが使う分（何もしていないとき、負荷なしで1回読んだ値: 60本のうち4本）、PostgRESTのプール設定、ホスト版の `reserved_connections`、満杯のときのStudio、本当の上限に近いホスト版の負荷。
 - **ホスト版の専用プーラーではありません:** ここのPgBouncerは、イメージの既定値のコンテナです。
 - **Supavisorの設定:** CLIのテナントには、prepared statementの切り替えがなく、私も見つけられませんでした。ホスト版のテナント設定は分かりません。新しい版では挙動が違うかもしれません。
 - Rails、postgres.jsを使うEdge Function、Npgsql、pgx、HikariCP。Nanoより大きいコンピュートサイズ（数字はドキュメント）。リージョンをまたぐ遅延。プラットフォームのリクエスト上限。
