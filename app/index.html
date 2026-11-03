@@ -29,27 +29,33 @@
 <body>
 <main>
   <h1>Connection budget calculator</h1>
-  <p class="sub">How many database connections will my app use, through which door, and does it fit?</p>
+  <p class="sub">Backends = direct clients + (roles x modes x pool size) + Data API pool + other services. Does it fit under max_connections, and under the pooler client cap?</p>
   <form id="f">
     <label>Compute size <select id="compute"></select></label>
     <label>Pooler pool size <small>Database settings → Connection pooling</small><input id="poolSize" type="number" min="1" value="15"></label>
     <label>Door <select id="door"></select></label>
     <label>Framework <select id="framework"></select><small id="fwnote"></small></label>
     <label id="paramWrap" hidden><span id="paramLabel"></span><input id="param" type="number" min="1" value="10"></label>
-    <label>Running copies of the app <small>servers, containers, or busy functions at the same moment</small><input id="instances" type="number" min="1" value="1"></label>
-    <label>Left for Supabase's own services <small>Auth, Storage, PostgREST, health checks. My project showed about 16-17 when idle.</small><input id="headroom" type="number" min="0" value="17"></label>
+    <label>Running copies of the app <small>servers, containers, workers, or busy functions at the same moment</small><input id="instances" type="number" min="1" value="1"></label>
+    <label>Database roles that connect through the pooler <small>each (role, database, mode) gets its own pool</small><input id="roles" type="number" min="1" value="1"></label>
+    <label>Pooler modes in use <small>1 = only 6543 or only 5432; 2 = both</small><input id="modes" type="number" min="1" max="2" value="1"></label>
+    <label>Use the Data API (supabase-js / REST)? <small>its own pool: about 11 connections in my runs</small><select id="usesDataApi"><option value="1">yes</option><option value="">no</option></select></label>
+    <label>Other services (Auth, Storage, Realtime, dashboard) <small>my estimate: about 5. Check your own pg_stat_activity.</small><input id="other" type="number" min="0" value="5"></label>
+    <label>Queries per second (optional) <input id="qps" type="number" min="0" placeholder="e.g. 100"></label>
+    <label>Seconds per query, in ms (optional) <input id="queryMs" type="number" min="0" placeholder="e.g. 200"></label>
   </form>
   <section id="result" aria-live="polite">
     <div class="nums">
       <div class="num"><b id="nClients">-</b><span>client connections your app opens</span></div>
       <div class="num"><b id="nBackend">-</b><span>backend connections to Postgres</span></div>
-      <div class="num"><b id="nTotal">-</b><span>total with Supabase services</span></div>
+      <div class="num"><b id="nTotal">-</b><span>total: backends + Data API + other services</span></div>
       <div class="num"><b id="nMax">-</b><span>max_connections for this size</span></div>
     </div>
     <div id="findings"></div>
   </section>
-  <p class="note">This is a model, not a measurement of your project. Compute-size limits come from the Supabase docs (checked 2026-11-02). The behaviours (session mode errors above the pool size, idle connections staying open for about 3 minutes) are from one Free-plan project in one run. The numbers inside the page do not call any server.</p>
+  <p class="note">This is a model, not a measurement of your project. Compute-size limits come from the Supabase docs (checked 2026-11-03). The behaviours (errors at the limits, the 60 s queue timeout, pool multiplication, the Data API pool) come from my local lab (Supabase CLI stack set to Nano-like limits), not from a hosted project. The page does not call any server.</p>
 </main>
+<script src="i18n/en.js"></script>
 <script src="calc.js"></script>
 <script src="board.js"></script>
 </body>

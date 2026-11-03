@@ -1,0 +1,12 @@
+# Add these to supabase/config.toml of a scratch project (`supabase init`), mirroring a Free/Nano project.
+# Then start only what the tests need:
+#   supabase start -x gotrue,realtime,storage-api,imgproxy,mailpit,studio,edge-runtime,logflare,vector,postgres-meta
+[db.pooler]
+enabled = true
+port = 54329
+pool_mode = "transaction"   # change to "session" and restart to repeat tests 03/04 in session mode (one mode at a time locally)
+default_pool_size = 15      # Nano default
+max_client_conn = 200       # Nano limit
+# max_connections = 60 in [db] did NOT take effect for me. Set it after start (and again after a `supabase stop`):
+#   docker exec supabase_db_<project_id> psql -U supabase_admin -d postgres -c "alter system set max_connections=60"
+#   docker restart supabase_db_<project_id>

@@ -1,74 +1,104 @@
-# connection-budget-ja-demo
+# connection-budget-demo
 
 [English](README.md) | [日本語](README.ja.md)
 
-**個人の学習記録・非公式です。** 自分で試した一人のビルダーが書いたもので、公式の案内でも、権威でもありません。
+**個人の学習記録・非公式です。** 同じ立場の作り手として自分で試した記録で、公式の案内でも、権威ある解説でもありません。
 
-私のアプリは、データベース接続を実際に何本開くのか。「入口」（Data API、ダイレクト、共有プーラーのセッションモード、共有プーラーのトランザクションモード）と、フレームワークの既定値で、何が変わるのか。このリポジトリには、測るのに使った**テスト用スクリプト**（Node.jsとPython）と、数字を見積もる小さな静的ページ**接続数の見積もり計算機**が入っています。
+アプリは、データベースの接続をいくつ使うのか。**なぜ**その数なのか。それを調べたラボです。**Nano並みの上限にしたローカルのSupabase**に対して動かすスクリプト（Node.js、Python、Prisma 6と7）と、数を1つの式にまとめる小さな**接続予算の計算ページ**が入っています。
 
-最後に実行して確認した日：**2026-11-02**。Supabaseの**無料**（Nano）プロジェクト1つ、リージョンはシドニー、IPv4だけのネットワークのノートPCから。
+実行・確認: **2026-11-03**、Supabase CLI 2.117（Docker）、1台のPC。この版では**ホスト版のプロジェクトでは何も動かしていません**（「確かめられていないこと」参照）。
+
+## たどりついた「予算の式」
+
+```
+使っているバックエンド接続 = 直接つなぐ接続
+                         + (ロール, データベース, モード) ごとのプールの min(そのプールのクライアント数, プールサイズ) の合計
+                         + Data APIの自前のプール（私の実験では約11本）
+                         + ほかのSupabaseのサービス（Auth、Storage、Realtime、ダッシュボード）
+                         → max_connections（Nano / Micro は60）に収まること
+
+アプリが開くクライアント接続 = アプリの同時コピー数 x ライブラリのプールサイズ
+                         → プーラーのクライアント上限（Nano / Micro は200）に収まること
+
+同時に使うバックエンド数 = 秒間クエリ数 x 1クエリの秒数      （リトルの法則）
+```
+
+Supabaseのドキュメント（Connection management）の目安: Data APIをよく使うなら、プールサイズは `max_connections` の約40%以下、使わないなら最大約80%。
 
 ## ファイル
 
 | パス | 内容 |
 |---|---|
-| `sql/probe-setup.sql` | テスト用ロール `conn_probe`、小さなテーブル、sleep関数、接続数を数える関数（デモ専用） |
-| `sql/probe-cleanup.sql` | それらをすべて消す |
-| `scripts/node/*.mjs` | pg Pool、postgres.js、Drizzle（node-postgres）、Prisma 6、supabase-js／fetch（Data API）、postgres.jsのパイプライン確認 |
-| `scripts/python/*.py` | SQLAlchemy 2、Django 4.2 |
-| `app/index.html`, `app/calc.js`, `app/board.js` | 計算機（素のHTML/JS。ビルドなし、通信なし、キーなし） |
-| `app/test-calc.js` | 計算機のロジックのテスト：`npm test` |
-| `ja/` | アプリとSQLの日本語版 |
+| `lab/config.example.toml` | Free/Nano相当にする `[db.pooler]` の設定（と `max_connections` の手順） |
+| `lab/setup.sql` | テスト用ロール `r1`〜`r4`、`slow(s)` 関数、`ping()` 関数（ローカルのラボ専用） |
+| `scripts/node/` | `lib.mjs` と、番号つきのテスト01〜11（`results/RESULTS.md`参照） |
+| `scripts/python/` | psycopg 3 の自動prepare、SQLAlchemy 2、Django 5.2 |
+| `scripts/prisma6/`, `scripts/prisma7/` | Prismaのテスト（それぞれ `package.json` あり） |
+| `results/RESULTS.md` | 測った数字すべてと、出したスクリプト |
+| `app/index.html`, `app/calc.js`, `app/board.js` | 計算ページ（素のHTML/JS、ビルド不要、通信なし、鍵なし） |
+| `app/test-calc.js` | 計算ロジックのテスト: `npm test` |
+| `ja/app/index.html` | 日本語のページ（`calc.js` は共通） |
 
-## 測り方
-各スクリプトは、**1秒間接続を握るクエリ**（`select 1 from pg_sleep(1)`）を**20本同時に**投げます。その間、補助の関数`conn_stats()`をData API経由で200msごとに呼び、`conn_probe`（Data APIの場合は`authenticator`）が持つPostgresのバックエンド接続の**ピーク**を記録します。クライアントを閉じたあとも、待ってもう一度数えます。
+## ラボを動かす
 
-設定は環境変数だけから読みます（ファイルには置きません）：`PROJECT_REF`、`POOLER_HOST`（ダッシュボードのConnectで分かる）、`PROBE_PASSWORD`（`sql/probe-setup.sql`で決めたパスワード）、`PUBLISHABLE_KEY`。
+```
+supabase init                      # 空の作業フォルダで
+# lab/config.example.toml を supabase/config.toml に足してから:
+supabase start -x gotrue,realtime,storage-api,imgproxy,mailpit,studio,edge-runtime,logflare,vector,postgres-meta
+docker exec supabase_db_<project_id> psql -U supabase_admin -d postgres -c "alter system set max_connections=60"
+docker restart supabase_db_<project_id>        # そのあとプーラーとrestのコンテナも再起動
+psql postgresql://postgres:postgres@127.0.0.1:54322/postgres -f lab/setup.sql
+```
 
-## 測った結果（2026-11-02、無料/Nano、プールサイズ15、1秒のクエリを20本同時）
+すでに別のローカルSupabaseが動いているPCでは、設定のポートを変えて、スクリプトには環境変数で渡します: `LAB_DB_PORT`、`LAB_POOLER_PORT`、`LAB_API_PORT`（既定は54322、54329、54321）、ほかに `LAB_HOST`、`LAB_TENANT`（既定 `pooler-dev`）、`LAB_PASSWORD`（CLIのローカル開発用パスワード。本物のデータベースには使わないでください）。
 
-| フレームワーク（既定のプール） | 入口 | クライアント | バックエンドのピーク | 結果 |
-|---|---|---|---|---|
-| supabase-js（Data API） | Data API | リクエスト20 | `authenticator` 2 → 11 | すべて成功 |
-| `fetch`（Data API） | Data API | リクエスト20 | 11のまま | すべて成功 |
-| pg Pool（最大10） | セッション 5432 | 10 | 10 | すべて成功 |
-| pg Pool（最大10） | トランザクション 6543 | 10 | +10 | すべて成功 |
-| postgres.js（最大10） | セッション 5432 | 10 | 最大10（前の実行の待機中の接続を再利用） | すべて成功 |
-| postgres.js（最大10） | トランザクション 6543 | 10 | 既定では**固まった**。`prepare: false, max_pipeline: 1`で成功 | 下を参照 |
-| Drizzle（node-postgres、最大10） | セッション 5432 | 10 | +10 | すべて成功 |
-| Prisma 6（CPU数 x 2 + 1 = 10コアで21） | トランザクション 6543（`pgbouncer=true`） | 20 | 16 | すべて成功 |
-| Prisma 6 | セッション 5432 | 20 | 15 | **15成功、5エラー**：`EMAXCONNSESSION max clients reached in session mode` |
-| SQLAlchemy 2（5 + 10の余裕） | セッション 5432 | 15 | 15 | 20スレッド成功（5つはアプリ側のプールで待機） |
-| SQLAlchemy 2（`prepare_threshold=None`） | トランザクション 6543 | 15 | 15 | すべて成功 |
-| Django 4.2（スレッドごとに1接続） | トランザクション 6543（`DISABLE_SERVER_SIDE_CURSORS`） | 20 | 16 | すべて成功 |
-| どれでも | ダイレクト 5432 | - | - | **私のノートPCからは届かず**：ホストにIPv6アドレスしかない（`getaddrinfo ENOTFOUND`） |
+```
+npm install                                # pg 8.23.1、postgres 4.0.0
+node scripts/node/01-postgresjs-hang.mjs pooler '{"max_pipeline":1}'
+node scripts/node/03-roles-and-pools.mjs 2 6 probe       # ロール2つ、クエリは6秒保持、満杯のデータベースを確かめる
+python3 -m venv venv && ./venv/bin/pip install "psycopg[binary,pool]" sqlalchemy "django>=5.2,<5.3"
+./venv/bin/python scripts/python/01-psycopg-prepare.py
+cd scripts/prisma6 && npm install && npx prisma generate && node run.cjs "<?pgbouncer=true つきのプーラーURL>"
+```
 
-「+10」は、前の実行から残っていた待機中の接続の上に、10本増えたという意味です。
+接続数を数えるテストの合間には、データベースとプーラーのコンテナを再起動してきれいな状態に戻してください（アイドルの接続は約2分残ります）。03と07は状態を残します（漏れた `SET`、アドバイザリロック、握ったままの接続）。次のテストの前に再起動を。
 
-予想していなかったこと：
-- **クライアントを閉じても、待機中のバックエンド接続は残ります。** 私の実行では、プーラーは約**3分**接続を持ち続け、Data APIの自分用のプールと合わせて、実行中のクエリが0なのにダッシュボードが**60本中41本**と表示した場面がありました。
-- **セッションモードは、プールサイズを超えると待たせず、断ります。** Prismaの既定のプールが15より大きいので、20本のうち5本が失敗しました。トランザクションモードは待たせました。
-- **ドキュメントでは、プールサイズは5432と6543で共有される**とあります。私の実行では、プールサイズ15なのに30本を見ました（セッションモードの15本が残っているところに、トランザクションモードが15本開いた）。理由は分からないので、見たとおりに書きます。
-- **postgres.js 4.0.0は、トランザクションプーラーで1つの接続に2本のクエリが並ぶと固まります**（クエリをパイプラインで送るため）。`scripts/node/postgresjs-pipelining.mjs`が、`select 1`2本で再現します。1本ずつなら動きます。`max_pipeline: 1`で、20本の実行は通りました。最後の実行では、`prepare`と`max_pipeline`を別々には試していません。
-- トランザクションプーラーでPrismaとDjangoが16本だったのは、プールサイズより1本多い数字です。1本余分な理由は分かりません。
+ローカルのプーラーは**一度に1つのモード**です（`pool_mode` を変えて再起動）。スクリプトのData APIリクエストには `apikey` ヘッダーを付けていません（ローカルでは通ったため）。ホスト版では、プロジェクトの公開用（publishable）キーが必要です。**service_roleキーは絶対に使わないでください。**
+
+## 分かったこと（2026-11-03、ラボ。詳細は `results/RESULTS.md`）
+
+- **(ロール, データベース, モード) ごとに別のプール**。プールサイズ15のロールが2つなら、最大30本。60本のデータベースでは、これで「満杯」になります。（ドキュメントには「2つのポートで共有」という書き方と「ユーザー・DB・モードごと」という書き方の両方がありました。）
+- **満杯になると**: 新しい直接接続は失敗（53300）、Data APIは `503 PGRST000`、プーラー経由の新規ログインも `EAUTHQUERY` で失敗。
+- **クライアント上限**: 200本目は入り、201本目は即座に拒否（`EMAXCONN`）。
+- **待ち**: トランザクションモードは待たせて、**60秒**で諦める（`ECHECKOUTTIMEOUT`）。セッションモードは、FAQでは「最大1分待たせる」とあるのに、私の環境では超えた分を即座に拒否（`EMAXCONNSESSION`）。
+- **Data APIにも自前のプール**（10 + 1本）。2.5秒の呼び出しを50本同時: 40本成功、10本がちょうど10秒で `504 PGRST003`。`anon` には `statement_timeout=3s` もあります。
+- **postgres.js 4.0.0がトランザクションモードでハングする原因はパイプライン**で、prepared statementではありません。`prepare:false` だけではハングし、`max_pipeline:1` だけで直ります。
+- **トランザクションモードでprepared statementが壊れる**: `?pgbouncer=true` なしのPrisma 6、5回同じクエリを流したあとのpsycopg 3（直し方は `prepare_threshold=None`）。Prisma 7のpgアダプタとnode-postgresは壊れませんでした。
+- **トランザクションモードでは、セッションの状態が別のクライアントに漏れる**: `SET` と `set_config(..., false)` は8回中8回漏れました。`set_config(..., true)`（トランザクション内だけ）を使います。セッションのアドバイザリロックとLISTEN/NOTIFYも、期待どおりには動きません。
+- **ライブラリの既定が掛け算になる**: pg Pool 10 のプロセス5つ = 直接接続50本。Prisma 6 は コア数x2+1（10コアで21）、Prisma 7 + pg は10、SQLAlchemy は5+10、Django 5.2 は既定でプールなし、`pool=True` で4。
+- **ピークだけでなく遅延も**: スループットは「約16 / クエリ時間」で頭打ち。超えた分のクライアントは待ちが増えるだけ（1秒のクエリ、100クライアントでp50が6秒）。リトルの法則が上限を言い当てました。
+- **失敗時**: node-postgresのプールは、`error` ハンドラがないと、データベースがアイドル接続を切った瞬間にプロセスごと落ちます。SQLAlchemyは `pool_pre_ping` が要ります。
+- **プーラーに接続が残る時間**: クライアントが閉じてから、ローカルで約2分。
+- **説明できていないこと**: プールサイズ15のロール1つで、トランザクションモードでは**16本**が使われました（セッションモードは15本）。
 
 ## 費用
-- **$0。** すべて無料プロジェクトで動かしました。ドキュメント（2026-11-02）では、有料のコンピュートはMicro（月約$10）から。Microの上限はNanoと同じ60／200です。
-- テストは短く（1回数秒）、モードごとに1回、最初のエラーで止めました。共有プーラー（Supavisor）はマルチテナントなので、負荷は小さくしました。
+- **$0。** ラボは自分のPC（Docker）で動きます。ホスト版の数字（Supabaseのドキュメント、2026-11-03）: Nanoは無料。有料プランの最小はMicroで月約$10、上限はNanoと同じ（直接60、プーラーのクライアント200、プールサイズ15）。Smallは約$15（90 / 400）、Mediumは約$60（120 / 600）、Largeは約$111（160 / 800）、XLは約$210（240 / 1000）。Proプランは月$25で、組織ごとに$10分のコンピュートクレジットが含まれ、Micro 1プロジェクト分をまかないます。プランを上げるだけでは接続の余裕は増えません。増えるのは、コンピュートのサイズを上げたときだけです。
 
-## セキュリティの注意
-- `sql/probe-setup.sql`は、ログインできるロールと、`pg_stat_activity`を読んで公開用キーで呼べる関数を作ります。**デモ専用**です。終わったら`sql/probe-cleanup.sql`で消してください。
-- スクリプトは手軽さのために、サーバー証明書を確かめない設定（`rejectUnauthorized: false` / `sslmode=require`）を使っています。実際の運用では、プロジェクトのCA証明書をダウンロードして確かめてください。
-- パスワードとキーは環境変数にだけ入れます。service_roleキーは、どこにも入れません。
+## セキュリティ上の注意
+- ラボはCLIのローカル開発用のパスワードと鍵を使います。本物のデータのある本物のデータベースに、このスクリプトを向けないでください。`lab/setup.sql` はごく簡単なパスワードのログインロールを作ります（ローカル専用）。
+- Data APIの関数 `slow()` は `anon` が呼べます。こういう遅い関数を公開すると、外部の人にData APIのプールを握られます。本物のプロジェクトでは公開しないでください。
+- service_roleキーは、ここには絶対に置かないでください。
 
-## 試していないこと
-- **Rails**と、**Edge Functionからのpostgres.js**：動かしていません。
-- Nanoより大きいコンピュートサイズ、専用プーラー（PgBouncer）、有料のIPv4アドオン／ダイレクト接続（私のネットワークはIPv4だけ）。
-- クライアント200本の上限と、`max_connections`の60本：そこまでは**押していません**（ルール：上限をほんの少し超えるだけ、数秒だけ、共有プーラーなので控えめに）。計算機の数字は、ドキュメントからです。
-- ドライバーのバージョン：pg 8.23.1、postgres 4.0.0、supabase-js 2.118.0、drizzle-orm 0.45.4、Prisma 6.19.3、SQLAlchemy 2.0.55（psycopg 3.2.13）、Django 4.2.30。
+## 確かめられていないこと
+- **ホスト版のプロジェクトでは動かしていません**（共有プーラーの再確認、ホスト版の `max_connections` のうちSupabaseのサービスが使う分、ホスト版のプール設定）。ローカルのプーラーは同じオープンソース（私のCLIではSupavisor 2.9.12）ですが、設定が違う可能性があります。
+- プーラーへの**クライアント接続数**（ダッシュボードにグラフがあります）。数えたのはバックエンドだけです。
+- Rails、postgres.jsを使うEdge Function、Npgsql、pgx、HikariCP、専用プーラー（PgBouncer）。
+- Nanoより大きいコンピュートサイズ（数字はドキュメントによる）、リージョンをまたぐ遅延、負荷中のデータベース再起動。
+- 各実験は多くても数回。遅延の表は、1マスあたり6秒の1回です。
+- バージョン: pg 8.23.1、postgres 4.0.0、Prisma 6.19.3 と 7.10.1、psycopg 3.3.6（psycopg_pool 3.3.3）、SQLAlchemy 2.1.6、Django 5.2.18、Node 24、Python 3.14、Supabase CLI 2.117.0、Supavisor 2.9.12、PostgREST 16.2。
 
 ## 後片付け
-`sql/probe-cleanup.sql`を実行し、環境変数を消し、ローカルのサーバーを止めます。
+作業フォルダで `supabase stop` して、フォルダを消します。
 
 ## ライセンス
-MIT。`LICENSE`を参照。
+MIT。`LICENSE` を見てください。

@@ -1,90 +1,104 @@
-# connection-budget-ja-demo
+# connection-budget-demo
 
 [English](README.md) | [日本語](README.ja.md)
 
-**Personal learning record, unofficial.** I am a fellow builder who tried this myself; this is not official guidance and not an authority.
+**This is a personal learning record, unofficial.** I am a fellow builder who tried this myself; this is not official guidance and not an authority.
 
-How many database connections does my app really open, and what changes with the "door" (Data API, direct, shared pooler in session mode, shared pooler in transaction mode) and the framework's defaults? This repo has the **test scripts** I used (Node.js and Python) and a small static **connection budget calculator** page that models the numbers.
+How many database connections does my app really use, and **why**? This repo has the lab I used to find out: scripts (Node.js, Python, Prisma 6 and 7) that run against a **local Supabase stack set to Nano-like limits**, plus a small static **connection budget calculator** page that puts the numbers into one equation.
 
-Last run and checked: **2026-11-02**, one Supabase **Free** (Nano) project, region Sydney, from a laptop on an IPv4-only network.
+Run and checked: **2026-11-03**, on one laptop with the Supabase CLI 2.117 (Docker). **Nothing here was run on a hosted project** in this version; see "Not verified".
+
+## The budget equation I ended up with
+
+```
+backends in use  =  direct connections
+                  + sum over every (role, database, mode) pool of  min(clients of that pool, pool size)
+                  + the Data API's own pool (about 11 in my runs)
+                  + other Supabase services (Auth, Storage, Realtime, the dashboard)
+must stay under max_connections        (Nano / Micro: 60)
+
+clients your app opens  =  running copies of the app  x  that library's pool size
+must stay under the pooler's client cap  (Nano / Micro: 200)
+
+busy backends  =  queries per second  x  seconds per query      (Little's law)
+```
+
+Rule of thumb from the Supabase docs (Connection management): keep the pool size under about 40% of `max_connections` if you use the Data API heavily, up to about 80% if you do not.
 
 ## Files
 
 | Path | What it is |
 |---|---|
-| `sql/probe-setup.sql` | Test role `conn_probe`, a tiny table, a sleep function and a connection-counting function (demo only) |
-| `sql/probe-cleanup.sql` | Removes all of it |
-| `scripts/node/*.mjs` | pg Pool, postgres.js, Drizzle (node-postgres), Prisma 6, supabase-js / fetch (Data API), and a postgres.js pipelining check |
-| `scripts/python/*.py` | SQLAlchemy 2 and Django 4.2 |
+| `lab/config.example.toml` | The `[db.pooler]` settings (and the `max_connections` step) to mirror a Free/Nano project locally |
+| `lab/setup.sql` | Four test roles `r1`..`r4`, a `slow(s)` function and a `ping()` function (local lab only) |
+| `scripts/node/` | `lib.mjs` plus numbered tests 01-11 (see `results/RESULTS.md`) |
+| `scripts/python/` | psycopg 3 auto-prepare, SQLAlchemy 2, Django 5.2 |
+| `scripts/prisma6/`, `scripts/prisma7/` | The Prisma tests (separate `package.json` each) |
+| `results/RESULTS.md` | Every number I measured, with the script that produced it |
 | `app/index.html`, `app/calc.js`, `app/board.js` | The calculator (plain HTML/JS, no build, no network calls, no keys) |
 | `app/test-calc.js` | Tests of the calculator's logic: `npm test` |
-| `ja/` | Japanese copies of the app and SQL |
+| `ja/app/index.html` | Japanese page (uses the same `calc.js`) |
 
-## How I measured
-Each script fires **20 concurrent queries** that each hold a connection for 1 second (`select 1 from pg_sleep(1)`), while a helper polls `conn_stats()` through the Data API every 200 ms and records the peak number of Postgres backend connections owned by `conn_probe` (or by `authenticator` for the Data API). Then it waits and reads the count again after the clients closed.
-
-Configuration is read from environment variables, never from files:
+## Run the lab
 
 ```
-export PROJECT_REF=<your project ref>
-export POOLER_HOST=<pooler host from the dashboard Connect dialog>
-export PROBE_PASSWORD=<the random password you put in sql/probe-setup.sql>
-export PUBLISHABLE_KEY=<the project's publishable key>
+supabase init                      # in an empty scratch folder
+# add lab/config.example.toml to supabase/config.toml, then:
+supabase start -x gotrue,realtime,storage-api,imgproxy,mailpit,studio,edge-runtime,logflare,vector,postgres-meta
+docker exec supabase_db_<project_id> psql -U supabase_admin -d postgres -c "alter system set max_connections=60"
+docker restart supabase_db_<project_id>        # then restart the pooler and rest containers too
+psql postgresql://postgres:postgres@127.0.0.1:54322/postgres -f lab/setup.sql
 ```
 
+If your machine already runs another local Supabase project, change the ports in the config and pass them to the scripts: `LAB_DB_PORT`, `LAB_POOLER_PORT`, `LAB_API_PORT` (defaults 54322, 54329, 54321), also `LAB_HOST`, `LAB_TENANT` (default `pooler-dev`) and `LAB_PASSWORD` (the CLI's local development password; never use it for a real database).
+
 ```
-cd scripts/node && npm install        # or use the package.json at the repo root
-node pg-pool.mjs session              # door = session | transaction
-node postgresjs.mjs transaction nopipe
-node prisma.mjs session               # first: npx prisma generate --schema prisma/schema.prisma
-cd ../python && python3 -m venv venv && ./venv/bin/pip install sqlalchemy "psycopg[binary]" django
-./venv/bin/python sqlalchemy_pool.py session
+npm install                                # pg 8.23.1, postgres 4.0.0
+node scripts/node/01-postgresjs-hang.mjs pooler '{"max_pipeline":1}'
+node scripts/node/03-roles-and-pools.mjs 2 6 probe       # 2 roles, queries hold 6 s, probe the full database
+python3 -m venv venv && ./venv/bin/pip install "psycopg[binary,pool]" sqlalchemy "django>=5.2,<5.3"
+./venv/bin/python scripts/python/01-psycopg-prepare.py
+cd scripts/prisma6 && npm install && npx prisma generate && node run.cjs "<pooler url with ?pgbouncer=true>"
 ```
 
-## What I measured (2026-11-02, Free/Nano, pool size 15, 20 concurrent 1-second queries)
+Between tests that count backends, restart the database and pooler containers for a clean state (idle backends linger for about 2 minutes). Tests 03 and 07 leave state behind (leaked `SET`, advisory locks, held connections): restart before the next one.
 
-| Framework (default pool) | Door | Clients | Peak backends | Result |
-|---|---|---|---|---|
-| supabase-js (Data API) | Data API | 20 requests | `authenticator` 2 -> 11 | all ok |
-| plain `fetch` (Data API) | Data API | 20 requests | stayed at 11 | all ok |
-| pg Pool (max 10) | session 5432 | 10 | 10 | all ok |
-| pg Pool (max 10) | transaction 6543 | 10 | +10 | all ok |
-| postgres.js (max 10) | session 5432 | 10 | at most 10 (it reused idle backends left by the previous run) | all ok |
-| postgres.js (max 10) | transaction 6543 | 10 | **hung** with defaults; ok with `prepare: false, max_pipeline: 1` | see below |
-| Drizzle (node-postgres, max 10) | session 5432 | 10 | +10 | all ok |
-| Prisma 6 (CPUs x 2 + 1 = 21 on 10 cores) | transaction 6543 (`pgbouncer=true`) | 20 | 16 | all ok |
-| Prisma 6 | session 5432 | 20 | 15 | **15 ok, 5 errors**: `EMAXCONNSESSION max clients reached in session mode` |
-| SQLAlchemy 2 (5 + 10 overflow) | session 5432 | 15 | 15 | 20 threads ok (5 waited in the app pool) |
-| SQLAlchemy 2 (`prepare_threshold=None`) | transaction 6543 | 15 | 15 | all ok |
-| Django 4.2 (one connection per thread) | transaction 6543 (`DISABLE_SERVER_SIDE_CURSORS`) | 20 | 16 | all ok |
-| any | direct 5432 | - | - | **not reachable from my laptop**: the host has only an IPv6 address (`getaddrinfo ENOTFOUND`) |
+The local pooler runs **one mode at a time** (set `pool_mode` and restart). The Data API requests in the scripts carry no `apikey` header because the local stack accepted them; on a hosted project you must send the project's publishable key, and **never** a service_role key.
 
-"+10" means the count rose by 10 on top of idle connections left over from the previous run.
+## What I found (2026-11-03, lab, details in `results/RESULTS.md`)
 
-Things I saw that I did not expect:
-- **Idle backends stay open after the clients close.** After my runs the pooler kept its backend connections for **about 3 minutes**, and together with the Data API's own pool the dashboard showed **41 of 60** connections at one point with 0 active queries.
-- **Session mode does not queue beyond the pool size; it refuses.** Prisma's default pool is larger than the pool size of 15, so 5 of 20 queries failed. Transaction mode queued instead.
-- **The docs say the pool size is shared between ports 5432 and 6543.** In my runs I saw 30 backends with a pool size of 15 (15 left from session mode while transaction mode opened 15 more). I do not know why; I report what I saw.
-- **postgres.js 4.0.0 on the transaction pooler hangs when two queries are queued on one connection** (it pipelines them). `scripts/node/postgresjs-pipelining.mjs` reproduces it with two `select 1`; one at a time works. `max_pipeline: 1` fixed my 20-query run. I did not test `prepare` and `max_pipeline` separately for the final run.
-- The 16 for Prisma and Django on the transaction pooler is one above the pool size; I do not know where the extra one comes from.
+- **Each (role, database, mode) has its own pool.** Two roles with pool size 15 can hold 30 backends; on a 60-connection database with other users that is how "the database is full" happens. (The docs have said both "shared between the two ports" and "per user, database and mode".)
+- **At the limit** (database full): new direct connections fail (53300), the Data API returns `503 PGRST000`, and a new login through the pooler fails with `EAUTHQUERY`.
+- **Client cap:** client 200 connects, client 201 is refused at once (`EMAXCONN`).
+- **Waiting:** transaction mode queues clients and gives up after **60 s** (`ECHECKOUTTIMEOUT`); session mode refused extra clients at once (`EMAXCONNSESSION`) although the FAQ says it can queue for up to a minute.
+- **The Data API has its own pool** (10 + 1 backends). 50 concurrent 2.5 s calls: 40 ok, 10 failed after exactly 10 s with `504 PGRST003`. `anon` also has `statement_timeout=3s`.
+- **postgres.js 4.0.0 hang on the transaction pooler = pipelining**, not prepared statements: `prepare:false` alone still hangs, `max_pipeline:1` alone fixes it.
+- **Prepared statements break on the transaction pooler** for Prisma 6 without `?pgbouncer=true` and for psycopg 3 after 5 runs of a query (fix: `prepare_threshold=None`). Prisma 7 with the pg adapter and node-postgres did not.
+- **Session state leaks between clients in transaction mode**: `SET` and `set_config(..., false)` leaked 8 of 8 times; use `set_config(..., true)` (transaction-local). Session advisory locks and LISTEN/NOTIFY do not behave either.
+- **Library defaults multiply:** 5 processes x pg Pool 10 = 50 direct backends. Prisma 6 = cores x 2 + 1 (21 on 10 cores), Prisma 7 + pg = 10, SQLAlchemy 5 + 10, Django 5.2 no pool by default, `pool=True` = 4.
+- **Latency, not just peaks:** throughput capped at about 16 / query time; past the cap extra clients only add waiting (1 s queries, 100 clients: p50 6 s). Little's law predicted the cap.
+- **Failure:** a node-postgres pool without an `error` handler crashes the process when the database kills an idle connection; SQLAlchemy needs `pool_pre_ping`.
+- **Pool lingering:** about 2 minutes locally after clients closed.
+- **Unexplained:** one role with pool size 15 held **16** backends in transaction mode (15 in session mode).
 
 ## Cost
-- **$0.** Everything ran on a Free project. The dashboard says compute and the shared pooler are part of the free plan. Docs (2026-11-02): paid compute starts at Micro, about $10 a month, and Micro has the same 60 / 200 limits as Nano.
-- The tests are short (a few seconds each), one run per mode, and I stopped at the first errors. The shared pooler (Supavisor) is multi-tenant, so I kept the load small.
+- **$0.** The lab runs on your own machine (Docker). Hosted numbers from the Supabase docs (2026-11-03): Nano is free; on a paid plan the smallest compute is Micro at about $10 a month, with the same limits as Nano (60 direct connections, 200 pooler clients, pool size 15). Small is about $15 (90 / 400), Medium about $60 (120 / 600), Large about $111 (160 / 800), XL about $210 (240 / 1000). The Pro plan is $25 a month and includes $10 of compute credit per organization, which covers one Micro project. Upgrading the plan alone buys no connection headroom; only a bigger compute size does.
 
 ## Security notes
-- `sql/probe-setup.sql` creates a login role and a function that reads `pg_stat_activity` and is callable with the publishable key. That is **demo only**: run `sql/probe-cleanup.sql` afterwards.
-- The scripts use `ssl: { rejectUnauthorized: false }` / `sslmode=require` for convenience, which does not verify the server certificate. For real use download the project's CA certificate and verify.
-- Passwords and keys only go into environment variables. Never put a service_role key anywhere here.
+- The lab uses the CLI's local development password and keys. Do not point these scripts at a real database with real data. `lab/setup.sql` creates login roles with a trivial password: local only.
+- The Data API function `slow()` is callable by `anon`. Any slow function exposed like this lets outsiders hold the Data API's pool; do not expose one on a real project.
+- Never put a service_role key anywhere here.
 
 ## Not verified
-- **Rails** and an **Edge Function with postgres.js**: not run.
-- Compute sizes above Nano, the dedicated pooler (PgBouncer), and the paid IPv4 add-on / direct connections (my network is IPv4-only).
-- The 200-client limit and the 60-connection `max_connections`: I did **not** push to them (rule: only slightly over a limit, for seconds, on a shared pooler). The numbers in the calculator for them come from the docs.
-- Other drivers/versions: pg 8.23.1, postgres 4.0.0, supabase-js 2.118.0, drizzle-orm 0.45.4, Prisma 6.19.3, SQLAlchemy 2.0.55 with psycopg 3.2.13, Django 4.2.30.
+- **Not run on a hosted project** (no re-check of the shared pooler, the hosted `max_connections` split between Supabase services and your connections, or the hosted pool settings). The local pooler is the same open-source software (Supavisor 2.9.12 in my CLI) but may be configured differently.
+- Counts of **client connections** to the pooler (the dashboard has a chart for it); only backends were counted.
+- Rails, Edge Functions with postgres.js, Npgsql, pgx, HikariCP, and the dedicated pooler (PgBouncer).
+- Compute sizes above Nano (their numbers are from the docs), latency across regions, restarts of the database during load.
+- Each experiment ran a few times at most; the latency table is one 6-second run per cell.
+- Versions: pg 8.23.1, postgres 4.0.0, Prisma 6.19.3 and 7.10.1, psycopg 3.3.6 (psycopg_pool 3.3.3), SQLAlchemy 2.1.6, Django 5.2.18, Node 24, Python 3.14, Supabase CLI 2.117.0, Supavisor 2.9.12, PostgREST 16.2.
 
 ## Cleanup
-Run `sql/probe-cleanup.sql`, delete the environment variables, and stop any local server.
+`supabase stop` in the scratch folder, and delete it.
 
 ## License
 MIT, see `LICENSE`.

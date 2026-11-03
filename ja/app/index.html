@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>接続数の見積もり計算機</title>
+<title>接続の予算を計算する</title>
 <style>
   body { font: 15px/1.5 system-ui, sans-serif; margin: 0; background: #f6f7f9; color: #1c2330; }
   main { max-width: 860px; margin: 0 auto; padding: 24px 16px 40px; }
@@ -28,29 +28,36 @@
 </head>
 <body>
 <main>
-  <h1>接続数の見積もり計算機</h1>
-  <p class="sub">私のアプリはデータベース接続を何本使うか。どの入口を通すと、収まるか。</p>
+  <h1>接続の予算を計算する</h1>
+  <p class="sub">バックエンド接続 = 直接つなぐ数 + (ロール数 x モード数 x プールサイズ) + Data APIのプール + ほかのサービス。max_connections と、プーラーのクライアント上限に収まるか？</p>
   <form id="f">
-    <label>コンピュートサイズ <select id="compute"></select></label>
-    <label>プーラーのプールサイズ <small>Database設定 → Connection pooling</small><input id="poolSize" type="number" min="1" value="15"></label>
-    <label>入口 <select id="door"></select></label>
+    <label>コンピュートのサイズ <select id="compute"></select></label>
+    <label>プーラーのプールサイズ <small>Database settings → Connection pooling</small><input id="poolSize" type="number" min="1" value="15"></label>
+    <label>入口（ドア） <select id="door"></select></label>
     <label>フレームワーク <select id="framework"></select><small id="fwnote"></small></label>
     <label id="paramWrap" hidden><span id="paramLabel"></span><input id="param" type="number" min="1" value="10"></label>
-    <label>同時に動くアプリの数 <small>サーバー、コンテナ、同時に忙しい関数の数</small><input id="instances" type="number" min="1" value="1"></label>
-    <label>Supabase自身の分 <small>Auth、Storage、PostgREST、ヘルスチェック。私のプロジェクトでは、待機中で約16〜17本でした。</small><input id="headroom" type="number" min="0" value="17"></label>
+    <label>アプリの同時コピー数 <small>サーバー、コンテナ、ワーカー、同時に動く関数の数</small><input id="instances" type="number" min="1" value="1"></label>
+    <label>プーラー経由でつなぐDBロールの数 <small>(ロール, データベース, モード) ごとに別のプール</small><input id="roles" type="number" min="1" value="1"></label>
+    <label>使うプーラーのモード数 <small>1 = 6543だけ（または5432だけ）、2 = 両方</small><input id="modes" type="number" min="1" max="2" value="1"></label>
+    <label>Data API（supabase-js / REST）を使う？ <small>独自のプール。私の実験では約11本</small><select id="usesDataApi"><option value="1">使う</option><option value="">使わない</option></select></label>
+    <label>ほかのサービス（Auth、Storage、Realtime、ダッシュボード） <small>私の見積もりは約5本。自分の pg_stat_activity で確認してください。</small><input id="other" type="number" min="0" value="5"></label>
+    <label>秒間クエリ数（任意） <input id="qps" type="number" min="0" placeholder="例: 100"></label>
+    <label>1クエリの時間（ミリ秒・任意） <input id="queryMs" type="number" min="0" placeholder="例: 200"></label>
   </form>
   <section id="result" aria-live="polite">
     <div class="nums">
       <div class="num"><b id="nClients">-</b><span>アプリが開くクライアント接続</span></div>
       <div class="num"><b id="nBackend">-</b><span>Postgresへのバックエンド接続</span></div>
-      <div class="num"><b id="nTotal">-</b><span>Supabase自身の分を足した合計</span></div>
-      <div class="num"><b id="nMax">-</b><span>このサイズのmax_connections</span></div>
+      <div class="num"><b id="nTotal">-</b><span>合計: バックエンド + Data API + ほかのサービス</span></div>
+      <div class="num"><b id="nMax">-</b><span>このサイズの max_connections</span></div>
     </div>
     <div id="findings"></div>
   </section>
-  <p class="note">これは見積もりのモデルで、あなたのプロジェクトの実測ではありません。コンピュートサイズごとの上限はSupabaseのドキュメント（2026-11-02確認）から。挙動（プールサイズを超えるとセッションモードがエラーになる、使われなくなった接続が約3分残る）は、無料プロジェクト1つでの1回の実行です。このページは、どこにも通信しません。</p>
+  <p class="note">これは計算のモデルで、あなたのプロジェクトの実測ではありません。サイズごとの上限はSupabaseのドキュメント（2026-11-03確認）によります。上限でのエラー、60秒の待ち時間、プールの掛け算、Data APIのプールは、ホスト版ではなく、私のローカルのラボ（Nano並みの上限にしたSupabase CLI）で見たことです。このページはサーバーを呼びません。</p>
 </main>
-<script src="calc.js"></script>
-<script src="board.js"></script>
+<script src="../../app/i18n/ja.js"></script>
+<script src="../../app/i18n/en.js"></script>
+<script src="../../app/calc.js"></script>
+<script src="../../app/board.js"></script>
 </body>
 </html>
