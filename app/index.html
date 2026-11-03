@@ -41,6 +41,7 @@
     <label>Pooler modes in use <small>1 = only 6543 or only 5432; 2 = both</small><input id="modes" type="number" min="1" max="2" value="1"></label>
     <label>Use the Data API (supabase-js / REST)? <small>its own pool: about 11 connections in my runs</small><select id="usesDataApi"><option value="1">yes</option><option value="">no</option></select></label>
     <label>Other services (Auth, Storage, Realtime, dashboard) <small>my estimate: about 5. Check your own pg_stat_activity.</small><input id="other" type="number" min="0" value="5"></label>
+    <label>Reserved for superusers <small>superuser_reserved_connections: 3 in my lab. Check `show superuser_reserved_connections` on yours.</small><input id="reserved" type="number" min="0" value="3"></label>
     <label>Queries per second (optional) <input id="qps" type="number" min="0" placeholder="e.g. 100"></label>
     <label>Seconds per query, in ms (optional) <input id="queryMs" type="number" min="0" placeholder="e.g. 200"></label>
   </form>
@@ -49,7 +50,7 @@
       <div class="num"><b id="nClients">-</b><span>client connections your app opens</span></div>
       <div class="num"><b id="nBackend">-</b><span>backend connections to Postgres</span></div>
       <div class="num"><b id="nTotal">-</b><span>total: backends + Data API + other services</span></div>
-      <div class="num"><b id="nMax">-</b><span>max_connections for this size</span></div>
+      <div class="num"><b id="nMax">-</b><span>max_connections minus reserved slots</span></div>
     </div>
     <div id="findings"></div>
   </section>

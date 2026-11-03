@@ -1,12 +1,25 @@
-# Add these to supabase/config.toml of a scratch project (`supabase init`), mirroring a Free/Nano project.
-# Then start only what the tests need:
-#   supabase start -x gotrue,realtime,storage-api,imgproxy,mailpit,studio,edge-runtime,logflare,vector,postgres-meta
+# Add these to supabase/config.toml of a scratch project (`supabase init`) to mirror a Free/Nano project locally.
+#
+# Start the services the tests use. Leave out only what you do not need (Edge Runtime, logs, imgproxy, mailpit):
+#   supabase start -x edge-runtime,logflare,vector,imgproxy,mailpit
+#   (the Data API, Auth, Storage, Realtime, Studio and the pooler are then running next to the database)
+# The output of `supabase start` prints local keys. Only the publishable key is used by the scripts.
+
+[db.settings]
+# max_connections goes here (not under [db]). If you ever ran `alter system set max_connections`, run
+# `alter system reset max_connections` first: postgresql.auto.conf overrides this value.
+#
+# Sizing: a hosted Nano allows 60 and its own services use about 16 at idle (my first hosted reading).
+# The local pooler keeps 29 connections of its own in the database (supavisor_meta 27 + cluster 2) that
+# live outside the database on a hosted project. 60 + 29 = about 90 leaves roughly the same free slots.
+max_connections = 90
+
 [db.pooler]
 enabled = true
 port = 54329
-pool_mode = "transaction"   # change to "session" and restart to repeat tests 03/04 in session mode (one mode at a time locally)
+pool_mode = "transaction"   # the container also serves session mode on its port 5432 (see the README: a forwarder container exposes it)
 default_pool_size = 15      # Nano default
 max_client_conn = 200       # Nano limit
-# max_connections = 60 in [db] did NOT take effect for me. Set it after start (and again after a `supabase stop`):
-#   docker exec supabase_db_<project_id> psql -U supabase_admin -d postgres -c "alter system set max_connections=60"
-#   docker restart supabase_db_<project_id>
+
+[studio]
+enabled = true

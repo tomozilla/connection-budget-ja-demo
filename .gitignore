@@ -16,3 +16,5 @@ __pycache__/
 supabase/.temp/
 supabase/.branches/
 gen/
+package-lock.json
+gen/

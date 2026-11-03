@@ -7,7 +7,8 @@ def snap():
     with psycopg.connect(f"postgresql://supabase_admin:{PW}@{H}:{DBP}/postgres") as c:
         return c.execute("select count(*) from pg_stat_activity where usename='r1'").fetchone()[0]
 # P1: psycopg auto-prepare (prepare_threshold=5) via transaction pooler vs direct
-for name,url in (("pooler",POOL),("direct",DIRECT)):
+extra=(("pgbouncer",os.environ["LAB_PGBOUNCER_URL"]),) if os.environ.get("LAB_PGBOUNCER_URL") else ()  # optional: postgresql://r1:<password>@host:port/postgres in front of the same database
+for name,url in (("pooler",POOL),("direct",DIRECT))+extra:
     errs=collections.Counter()
     def w():
         try:

@@ -41,6 +41,7 @@
     <label>使うプーラーのモード数 <small>1 = 6543だけ（または5432だけ）、2 = 両方</small><input id="modes" type="number" min="1" max="2" value="1"></label>
     <label>Data API（supabase-js / REST）を使う？ <small>独自のプール。私の実験では約11本</small><select id="usesDataApi"><option value="1">使う</option><option value="">使わない</option></select></label>
     <label>ほかのサービス（Auth、Storage、Realtime、ダッシュボード） <small>私の見積もりは約5本。自分の pg_stat_activity で確認してください。</small><input id="other" type="number" min="0" value="5"></label>
+    <label>管理者用の予約接続 <small>私のラボの superuser_reserved_connections は3。自分の `show superuser_reserved_connections` で確認してください。</small><input id="reserved" type="number" min="0" value="3"></label>
     <label>秒間クエリ数（任意） <input id="qps" type="number" min="0" placeholder="例: 100"></label>
     <label>1クエリの時間（ミリ秒・任意） <input id="queryMs" type="number" min="0" placeholder="例: 200"></label>
   </form>
@@ -49,7 +50,7 @@
       <div class="num"><b id="nClients">-</b><span>アプリが開くクライアント接続</span></div>
       <div class="num"><b id="nBackend">-</b><span>Postgresへのバックエンド接続</span></div>
       <div class="num"><b id="nTotal">-</b><span>合計: バックエンド + Data API + ほかのサービス</span></div>
-      <div class="num"><b id="nMax">-</b><span>このサイズの max_connections</span></div>
+      <div class="num"><b id="nMax">-</b><span>max_connections から予約分を引いた数</span></div>
     </div>
     <div id="findings"></div>
   </section>

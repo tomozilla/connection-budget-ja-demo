@@ -8,7 +8,12 @@ const PLP = process.env.LAB_POOLER_PORT || '54329'
 const API = process.env.LAB_API_PORT || '54321'
 const TENANT = process.env.LAB_TENANT || 'pooler-dev' // the CLI pooler's tenant id, appended to the user name
 export const POOL = (u = 'postgres') => `postgresql://${u}.${TENANT}:${PW}@${H}:${PLP}/postgres`
+const SPORT = process.env.LAB_SESSION_PORT // session-mode port of the same pooler (see README: a forwarder to the container's port 5432)
+export const POOL_SESSION = (u = 'postgres') => { if (!SPORT) throw new Error('set LAB_SESSION_PORT'); return `postgresql://${u}.${TENANT}:${PW}@${H}:${SPORT}/postgres` }
+const PGB = process.env.LAB_PGBOUNCER_PORT // an optional PgBouncer in front of the same database (see README)
+export const PGBOUNCER = (u = 'postgres') => { if (!PGB) throw new Error('set LAB_PGBOUNCER_PORT'); return `postgresql://${u}:${PW}@${H}:${PGB}/postgres` }
 export const DIRECT = (u = 'postgres') => `postgresql://${u}:${PW}@${H}:${DBP}/postgres`
+export const BASE = `http://${H}:${API}`
 export const API_URL = `http://${H}:${API}/rest/v1`
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 // Count backends per role through our OWN direct session as supabase_admin (it has reserved slots,
