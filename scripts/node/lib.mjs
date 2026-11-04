@@ -29,10 +29,10 @@ export async function snap() {
   for (const x of r.rows) { by[x.u] = (by[x.u] || 0) + x.n; total += x.n }
   return { total, by, rows: r.rows }
 }
-export async function admin(sql) {
+export async function admin(sql, params) {
   const c = new pg.Client({ connectionString: DIRECT('supabase_admin') })
   await c.connect()
-  const r = await c.query(sql)
+  const r = await c.query(sql, params)
   await c.end()
   return r
 }

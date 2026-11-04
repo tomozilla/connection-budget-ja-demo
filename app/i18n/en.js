@@ -15,7 +15,7 @@
     },
     msg: {
       maxclients: (c, m) => `${c} client connections for one role is above the pooler client limit (${m}). In my lab client ${m + 1} was refused at once (EMAXCONN).`,
-      capShared: (c, m) => `${c} clients in total is above ${m}, but spread over several roles. In my lab the cap applied per role (300 clients over 2 roles all connected) - but the docs and a hosted project's settings page describe this limit as per project, fixed by compute size. Assume it is project-wide.`,
+      capShared: (c, m) => `${c} clients in total is above ${m}, but spread over several roles. The cap is per role: on a hosted project 215 clients on one role stopped at exactly ${m}, while 150 on each of two roles all connected. Note that extra roles buy client slots only - 300 idle clients held just 2 backends, and the backend budget is the limit that actually bites.`,
       session: (c, p) => `Session mode: ${c} clients for a pool of ${p} per role. The extra clients are refused at once (EMAXCONNSESSION), they do not wait.`,
       queue: (c, p) => `Transaction mode: ${c} clients share ${p} backends per role (pool size + 1 in my lab and on a hosted pooler at pool size 3). The extra ones wait; after 60 s a waiting client gets ECHECKOUTTIMEOUT.`,
       full: (t, u, m, r) => `Total ${t} is above ${u} (max_connections ${m} minus ${r} reserved for superusers). In my lab this is the "database is full" state: new direct connections fail (53300), new pooler logins fail (EAUTHQUERY), Auth sign-in returned 500, and the Data API or Storage fail as soon as they need a new connection. Whatever must open a NEW connection fails first; on a hosted project Auth keeps about 10 warm, so the order can differ.`,
