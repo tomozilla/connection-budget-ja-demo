@@ -6,7 +6,7 @@
 
 How many database connections does my app really use, and **why**? This repo has the lab I used to find out: scripts (Node.js, Python, Prisma 6 and 7) that run against a **local Supabase stack set to Nano-like limits**, a few tiny checks for a hosted Free project, and a small static **connection budget calculator** page that puts the numbers into one equation.
 
-Run and checked: **2026-11-03**, on one laptop with the Supabase CLI 2.117 (Docker). Almost everything ran locally. The hosted pooler was checked only at pool size 3 with a handful of clients (script `24`); see "Not verified".
+Run and checked: **2026-11-03 and 2026-11-04**, on one laptop with the Supabase CLI 2.117 (Docker). Almost everything ran locally. The hosted pooler was checked only at pool size 3 with a handful of clients (script `24`). A few paid-plan-only readings came from a throwaway Pro/Micro project created and deleted on 2026-11-04 (script `28`); see "Not verified".
 
 ## The budget equation I ended up with
 
@@ -16,10 +16,12 @@ backends in use  =  direct connections
                       (a transaction-mode pool held pool size + 1 in my runs)
                   + the Data API's own pool (10, plus one LISTEN connection = 11)
                   + other Supabase services (Auth, Storage, Realtime, the dashboard)
+                  + the dedicated pooler's backends, if you run both poolers
+                      (the pool size setting applies to each pooler independently)
 must stay under  max_connections - superuser_reserved_connections     (Nano / Micro: 60 - 3 = 57)
 
 clients your app opens  =  running copies of the app  x  that library's pool size
-must stay under the pooler's client cap  (Nano / Micro: 200; per role in my lab)
+must stay under the pooler's client cap  (Nano / Micro: 200 -- treat it as per project, per pooler)
 
 busy backends  =  queries per second  x  seconds per query      (Little's law)
 ```
@@ -96,7 +98,10 @@ The local pooler runs **one mode at a time** (set `pool_mode`, restart); the for
 | `21-open-loop` | fixed arrival rate with a connection per request |
 | `22-leak-rls`, `23-data-api-no-leak` | a leaked setting becomes a leaked row; the Data API contrast |
 | `25-postgresjs-retry` | counts the Parse messages postgres.js sends and the errors it sees: is the pooler hang or the lack of errors a hidden retry? |
+| `26-begin-pipeline` | does `sql.begin()` survive the transaction pooler at `max_pipeline` 0 and 1? checks markers and that a transaction stays on one backend |
+| `27-mismatch` | the docs' other warning: plain concurrent queries, each with a unique marker, looking for "mismatched rows" (and reporting a hang as a hang) |
 | `24-hosted-tiny` | **hosted Free project only**, pool size 3, a handful of clients (see below) |
+| `28-hosted-lifetime` | **hosted only**: how long a backend lives after the client leaves (`lifetime`), the "1 hot connection" claim (`hot`), and whether session mode really closes immediately (`session`) |
 
 ## Hosted check (script 24)
 Only on a throwaway **Free** project, and only after setting the pooler **pool size to 3** in Database settings. Create a test login role with a password you generate yourself, and two small functions (`probe_sleep(numeric)` and a connection-counting function granted to the publishable key) in the SQL Editor, run `node scripts/node/24-hosted-tiny.mjs modes`, `... postgresjs '<options json>'` (one variant per call) and `... checkout` (about 70 s with 5 clients), then drop the role and functions and put the pool size back (15 on Nano). Variables: `PROJECT_REF`, `POOLER_HOST`, `PROBE_PASSWORD`, `PUBLISHABLE_KEY`. The script uses `ssl: { rejectUnauthorized: false }` for convenience, which does not verify the certificate.
@@ -106,8 +111,12 @@ Only on a throwaway **Free** project, and only after setting the pooler **pool s
 - **Each (role, database, mode) has its own pool.** One role on both ports held 16 + 15 = 31 backends; on a hosted pooler at pool size 3: 4 + 3. The docs have said both "shared between the two ports" and "per user, database and mode"; the dashboard says per user+db.
 - **Transaction mode held pool size + 1** (16 for 15, hosted 4 for 3). Session mode held exactly the pool size, PgBouncer 1.26.1 exactly 15. I can't explain the extra one.
 - **Roles multiply:** 2 roles = 16 + 16, 3 roles filled the lab (87 of 87).
-- **The client cap of 200 was per role** in my lab (300 clients over 2 roles all connected). The Supavisor source (`main`, 2026-11-03) counts clients per pool (role x mode) against `max_clients`; the hosted value of `max_clients` itself I haven't seen.
-- **When the database is full,** whatever needs a new connection fails first: direct connections (53300), pooler logins (`EAUTHQUERY`), and in my lab **Auth sign-in (500)**, because Auth held no idle connection (hosted Auth showed none while idle either; under load I haven't checked). The Data API and Storage kept working while their open connections were enough. After the heavy clients stopped, sign-in recovered at about 62 s.
+- **The client cap of 200 was per role** in my lab (300 clients over 2 roles all connected), and the Supavisor source (`main`, 2026-11-03) counts clients per pool (role x mode) against `max_clients`. **The docs and the dashboard read the other way**: the Pooling and limits page describes the cap as per pooler, set by compute size, and a Pro/Micro project's settings page says it is "fixed at 200 ... and cannot be changed". Treat per-role as a lab observation only and size as if 200 is the whole project's.
+- **When the database is full,** whatever needs a new connection fails first: direct connections (53300), pooler logins (`EAUTHQUERY`), and in my lab **Auth sign-in (500)**, because the lab's Auth held no idle connection. The Data API and Storage kept working while their open connections were enough. After the heavy clients stopped, sign-in recovered at about 62 s. **This ordering is lab-specific**: see the next point.
+- **Hosted services do hold connections, once used** (Pro/Micro, 2026-11-04). Idle: Auth 0, Storage 0. After 40 concurrent sign-in attempts: `supabase_auth_admin` **9-10**, released within about a minute. After 40 concurrent public-object requests: `supabase_storage_admin` **8**, still held 14 minutes later. So hosted Auth has a warm pool and need not be the first thing to fail; Storage permanently costs about 8 of the 57 usable connections once you serve a file.
+- **Micro has the same 60 `max_connections` as Nano** (read on a Pro/Micro project): a paid plan alone buys no connections, only a bigger compute size does. `superuser_reserved_connections` was 3 and `reserved_connections` 0 on both Nano and Micro; neither value is documented.
+- **postgres.js and `sql.begin()`:** `max_pipeline: 1` fixed the hang and did **not** break `sql.begin()` (0 wrong values, 0 split transactions, repeated). `max_pipeline: 0` through the pooler failed with `42P05 prepared statement already exists` on 4.0.0 (not the `UNSAFE_TRANSACTION` the docs describe; those upstream issues were closed 2026-10-29, the same day 4.0.0 shipped); adding `prepare: false` made it work but over 100x slower (19 ms to 2029 ms). **I never reproduced the "mismatched rows" the docs warn about** - the hang always came first.
+- **Backend lifetime:** the FAQ says transaction-mode backends close after 5 minutes unused, session-mode ones close immediately, and at least 1 hot connection is kept while a client is connected. Measured: about **2 minutes** in the lab and on hosted Pro (6 backends at 106 s, 0 at 122 s); the hot-connection claim held (1 backend still there at 137 s with one idle client); session mode did **not** close immediately (over 3 minutes, and the backend was reused). Budget with the documented 5 minutes, the larger number.
 - **Waiting:** transaction mode queues and gives up after **60 s** (`ECHECKOUTTIMEOUT`; hosted too); session mode refused extra clients at once (`EMAXCONNSESSION`) although the FAQ says it can queue. A prediction, `(clients - backends) / backends x query time` (queue wait; the measured p50 also includes the run time), matched: 199 clients, 4.5 s queries: 551 requests, no errors; 5.5 s queries: 46 of 510 requests timed out.
 - **Open loop:** at 200 arrivals/s against about 150/s of capacity, latency rose from 0.23 s to 1.26 s in 4 s, then about a quarter of arrivals got `EMAXCONN`.
 - **The Data API has its own pool** (10 + a `LISTEN "pgrst"` connection). 50 concurrent 2.5 s calls: 40 ok, 10 failed after exactly 10 s with `504 PGRST003`. `anon` has `statement_timeout=3s`.
@@ -129,8 +138,9 @@ Only on a throwaway **Free** project, and only after setting the pooler **pool s
 - The scripts need only a **publishable** key. Never put a secret or service_role key anywhere here.
 
 ## Not verified
-- **Hosted beyond pool size 3:** the client-connection chart, the client cap per role on hosted, the hosted `max_connections` split under load (idle, no traffic, read once on 2026-11-03: 4 of 60 in use), hosted PostgREST pool settings, `reserved_connections` on hosted, Studio at saturation, any hosted load near the real limits.
-- **Not a hosted dedicated pooler:** the PgBouncer here is a container with its image defaults.
+- **Hosted beyond pool size 3:** the client-connection chart, the client cap per role on hosted, hosted PostgREST pool settings, Studio at saturation, **any hosted load near the real limits (I never filled a hosted database -- it is shared infrastructure, so every "what fails first" result is from the lab)**, and how hosted Auth behaves when the database is actually full.
+- **Not a hosted dedicated pooler:** the PgBouncer here is a container with its image defaults. The hosted dedicated pooler is IPv6-only by default; from an IPv4-only network it needs the IPv4 add-on ($4/month), which I did not buy, so I only read its settings page.
+- **Storage's route:** the Supavisor FAQ says Storage uses the pooler as its own user+db+mode combination. On the project I measured, its connections had `application_name` `Supabase Storage API`, not `Supavisor`. One project, one observation.
 - **Supavisor settings:** the CLI tenant sets no prepared-statement switch and I found none; hosted tenant settings are unknown. Newer Supavisor versions may behave differently.
 - Rails, Edge Functions with postgres.js, Npgsql, pgx, HikariCP; compute sizes above Nano (numbers from the docs); latency across regions; platform request limits.
 - Each experiment ran a few times at most; the latency table is one 6-second run per cell.

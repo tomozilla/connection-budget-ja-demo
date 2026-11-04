@@ -40,7 +40,7 @@
     <label>Database roles that connect through the pooler <small>each (role, database, mode) gets its own pool</small><input id="roles" type="number" min="1" value="1"></label>
     <label>Pooler modes in use <small>1 = only 6543 or only 5432; 2 = both</small><input id="modes" type="number" min="1" max="2" value="1"></label>
     <label>Use the Data API (supabase-js / REST)? <small>its own pool: about 11 connections in my runs</small><select id="usesDataApi"><option value="1">yes</option><option value="">no</option></select></label>
-    <label>Other services (Auth, Storage, Realtime, dashboard) <small>my estimate: about 5. Check your own pg_stat_activity.</small><input id="other" type="number" min="0" value="5"></label>
+    <label>Other services (Auth, Storage, Realtime, health check) <small>about 5 while idle. Measured under load on a hosted Micro project: Auth 10 (released after ~1 min), Storage 8 (kept). Check your own pg_stat_activity.</small><input id="other" type="number" min="0" value="5"></label>
     <label>Reserved for superusers <small>superuser_reserved_connections: 3 in my lab. Check `show superuser_reserved_connections` on yours.</small><input id="reserved" type="number" min="0" value="3"></label>
     <label>Queries per second (optional) <input id="qps" type="number" min="0" placeholder="e.g. 100"></label>
     <label>Seconds per query, in ms (optional) <input id="queryMs" type="number" min="0" placeholder="e.g. 200"></label>
